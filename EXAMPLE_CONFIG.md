@@ -297,23 +297,3 @@ bundle exec exe/skaler_sim \
 ```
 
 Change one value per run. Compare `cost` (instance-minutes) with `avg p95` queue latency. Lower is better for both, and the choice is where to land between them. The simulator models the Redis constraint open-loop, so check any change that lets the fleet grow against the measured `redis_connected` series before shipping it.
-
-## Moving Cora onto this gem
-
-Cora still has its own copy of this code in `app/services/skaler/`. The gem is the same code with its Rails dependencies passed in as arguments instead, so switching is a small change:
-
-1. Add the gem, then delete `app/services/skaler/` and its tests. Keep `app/services/cora_skaler.rb` and its test.
-2. In an initializer: `require "skaler/solid_queue"` and `Skaler.logger = Rails.logger`.
-3. Construct `ScaleExecutor` with its clients and event hook passed in:
-   ```ruby
-   Skaler::ScaleExecutor.new(
-     render_client: RenderClient.new,
-     redis: redis,
-     on_scale: ->(by_n:, direction:, timestamp:) {
-       ActiveSupport::Notifications.instrument("instance_change.autoscaler", by_n:, direction:, timestamp:)
-       Measurometer.add_distribution_value("autoscaler.instance_change_pulse", by_n)
-     }
-   )
-   ```
-4. To keep reading through the read-only model: `Skaler::ReadyJobsSensor.new(model: SolidQueueReadyExecution)`.
-5. `bin/skaler_sim` becomes `bundle exec skaler_sim`, which no longer boots Rails.

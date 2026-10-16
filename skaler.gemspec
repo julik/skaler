@@ -18,7 +18,7 @@ Gem::Specification.new do |spec|
   # Not public yet - this blocks an accidental `gem push`
   spec.metadata["allowed_push_host"] = "https://not-published.invalid"
 
-  spec.files = Dir["lib/**/*.rb", "exe/*", "examples/*.csv", "README.md", "EXAMPLE_CONFIG.md"]
+  spec.files = Dir["lib/**/*.rb", "exe/*", "examples/*.csv", "README.md", "EXAMPLE_CONFIG.md", "LESSONS.md"]
   spec.bindir = "exe"
   spec.executables = ["skaler_sim"]
   spec.require_paths = ["lib"]

@@ -18,7 +18,7 @@ It ships sensors for Solid Queue and an actuator for Render. Everything else is 
 The simulator needs nothing but Ruby. Clone the repo and replay four hours of the bundled sample traffic through a concrete configuration. These are Cora's production settings:
 
 ```sh
-git clone <this repo> skaler && cd skaler
+git clone https://github.com/julik/skaler.git && cd skaler
 bundle install
 
 bundle exec exe/skaler_sim \
@@ -66,7 +66,7 @@ Expect to spend more time on the constraints and the dashboards than on the PID 
 
 ```ruby
 # Gemfile
-gem "skaler", git: "..."
+gem "skaler", git: "https://github.com/julik/skaler.git"
 ```
 
 ```ruby

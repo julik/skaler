@@ -13,6 +13,45 @@ It ships sensors for Solid Queue and an actuator for Render. Everything else is 
 > your personal e-mail assistant.
 > Send them some love for allowing me to share it.
 
+## See it work
+
+The simulator needs nothing but Ruby. Clone the repo and replay four hours of the bundled sample traffic through a concrete configuration. These are Cora's production settings:
+
+```sh
+git clone <this repo> skaler && cd skaler
+bundle install
+
+bundle exec exe/skaler_sim \
+  --ingress-csv examples/enqueues_per_minute.csv \
+  --durations examples/job_durations.csv \
+  --kp 1.0 --ki 0.01 --kd 2.0 --setpoint 0.8 --deadband 0.2 \
+  --alpha 0.45 --mode pressure \
+  --workers 2 --max-workers 60 --threads 12 \
+  --interval 15s --boot-lag 3m --cooldown 45s
+```
+
+It finishes in well under a minute and prints a summary:
+
+```
+Peak instances: 21  |  Total completed: 837343  |  Cost: 1776.5 instance-minutes
+Queue latency:  avg p50=13.338s  avg p95=16.631s  peak max=91.819s
+SVG written to tmp/skaler_trace.svg
+```
+
+On macOS the chart opens in Quick Look. Elsewhere, open `tmp/skaler_trace.svg` in a browser. Per-tick numbers are in `tmp/skaler_trace.csv`.
+
+![Simulated trace: instances, signal, arrivals, backlog, PID terms and queue latency over four hours](docs/example_trace.svg)
+
+Reading it from the top:
+
+- **Instances.** Green dashed lines mark scale-ups and red dashed lines mark scale-downs. The fleet climbs after every 5-minute sync burst and shrinks again before the next one arrives. The big step around the 2-hour mark is the digest spike.
+- **Utilization.** The raw signal is orange, the smoothed one is blue, and the setpoint is the dashed red line.
+- **Arrivals per tick** and **Ready Queue Depth** show the demand and the backlog it leaves behind.
+- **PID Output** shows the P, I and D terms separately, so you can see which one is driving each decision.
+- **Queue Latency** is on a log scale. This is what your users actually feel.
+
+Now change one thing and run it again. Adding `--workers 6` keeps a warmer floor: cost goes up about 10%, and average p50 latency drops from 13.3s to 9.5s. Every flag is listed under [The simulator](#the-simulator), and you can replay your own traffic as described in [Feeding it your own traffic](#feeding-it-your-own-traffic).
+
 ## Skaler is a kit, not a product
 
 You will not find `Skaler.configure { max_instances 20 }` here, and that is deliberate.

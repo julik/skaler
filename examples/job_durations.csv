@@ -1,0 +1,6 @@
+action,mean_ms,p90_ms
+SyncMailboxJob#perform,640.00,1150.00
+ProcessWebhookJob#perform,95.00,210.00
+FetchMessageJob#perform,410.00,1290.00
+GenerateDigestJob#perform,4200.00,9800.00
+SendNotificationJob#perform,180.00,420.00

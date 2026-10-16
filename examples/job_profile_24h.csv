@@ -1,0 +1,13 @@
+action,count_24h,mean_ms,p90_ms,p95_ms
+SyncMailboxJob#perform,1210000,640.00,1150.00,1480.00
+ProcessWebhookJob#perform,860000,95.00,210.00,320.00
+FetchMessageJob#perform,540000,410.00,1290.00,1650.00
+Search::IndexDocumentJob#perform,212000,820.00,1900.00,2600.00
+SendNotificationJob#perform,96000,180.00,420.00,610.00
+ResizeImageJob#perform,48000,1350.00,2900.00,3800.00
+RefreshAccessTokenJob#perform,36000,260.00,540.00,700.00
+GenerateDigestJob#perform,12000,4200.00,9800.00,13500.00
+DigestMailer#daily_digest,11800,900.00,1600.00,2100.00
+RecordMetricsJob#perform,2880,30.00,45.00,60.00
+PurgeStaleSessionsJob#perform,1440,75.00,120.00,150.00
+ExportReportJob#perform,1400,18500.00,42000.00,61000.00

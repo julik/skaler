@@ -1,0 +1,271 @@
+#!/usr/bin/env ruby
+# CLI runner for the Skaler autoscaler simulator.
+#
+# Usage:
+#   skaler_sim [options]
+#
+# All options can also be set via environment variables (uppercase, underscored).
+# CLI flags take precedence over env vars.
+#
+# Examples:
+#   skaler_sim --rate 500 --max-time 3600
+#   skaler_sim --kp 1.0 --kd 0.5 --no-open
+#   skaler_sim --profile background-job-profile-24h.csv
+#   MAX_TIME=600 RATE=500 skaler_sim
+
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+require "skaler"
+require "optparse"
+require "fileutils"
+
+# Parse a duration string into seconds.
+# Accepts bare integers (seconds) or suffixes: s, m, h, d.
+# Examples: "3600", "60m", "8h", "1.5h", "2d"
+def parse_duration(str)
+  case str.to_s.strip
+  when /\A(\d+(?:\.\d+)?)s?\z/
+    $1.to_f.to_i
+  when /\A(\d+(?:\.\d+)?)m\z/
+    ($1.to_f * 60).to_i
+  when /\A(\d+(?:\.\d+)?)h\z/
+    ($1.to_f * 3600).to_i
+  when /\A(\d+(?:\.\d+)?)d\z/
+    ($1.to_f * 86400).to_i
+  else
+    raise ArgumentError, "Cannot parse duration: #{str.inspect} (use e.g. 3600, 60m, 8h, 2d)"
+  end
+end
+
+# Defaults (env vars override these, CLI flags override env vars)
+defaults = {
+  max_time: 7200,
+  rate: 730,
+  seed: 42,
+  kp: 1.0,
+  ki: 0.01,
+  kd: 2.0,
+  setpoint: 0.8,
+  deadband: 0.2,
+  workers: 4,
+  max_workers: 60,
+  threads: 10,
+  interval: 60,
+  boot_lag: 180,
+  cooldown: 45,
+  mode: "pressure",
+  alpha: 0.75,
+  cascade: 0.8,
+  profile: nil,
+  profile_hours: 24,
+  ingress_csv: nil,
+  durations_csv: nil,
+  burst_ratio: 0.7,
+  output: "tmp/skaler_trace.svg",
+  csv: "tmp/skaler_trace.csv",
+  no_open: false
+}
+
+# Apply env var overrides
+config = defaults.dup
+config[:max_time] = parse_duration(ENV["MAX_TIME"]) if ENV["MAX_TIME"]
+config[:rate] = Integer(ENV["RATE"]) if ENV["RATE"]
+config[:seed] = Integer(ENV["SEED"]) if ENV["SEED"]
+config[:kp] = Float(ENV["KP"]) if ENV["KP"]
+config[:ki] = Float(ENV["KI"]) if ENV["KI"]
+config[:kd] = Float(ENV["KD"]) if ENV["KD"]
+config[:setpoint] = Float(ENV["SETPOINT"]) if ENV["SETPOINT"]
+config[:deadband] = Float(ENV["DEADBAND"]) if ENV["DEADBAND"]
+config[:workers] = Integer(ENV["WORKERS"]) if ENV["WORKERS"]
+config[:max_workers] = Integer(ENV["MAX_WORKERS"]) if ENV["MAX_WORKERS"]
+config[:threads] = Integer(ENV["THREADS"]) if ENV["THREADS"]
+config[:interval] = parse_duration(ENV["INTERVAL"]) if ENV["INTERVAL"]
+config[:boot_lag] = parse_duration(ENV["BOOT_LAG"]) if ENV["BOOT_LAG"]
+config[:cooldown] = parse_duration(ENV["COOLDOWN"]) if ENV["COOLDOWN"]
+config[:mode] = ENV["MODE"] if ENV["MODE"]
+config[:alpha] = Float(ENV["ALPHA"]) if ENV["ALPHA"]
+config[:cascade] = Float(ENV["CASCADE"]) if ENV["CASCADE"]
+config[:output] = ENV["OUTPUT"] if ENV["OUTPUT"]
+config[:csv] = ENV["CSV"] if ENV["CSV"]
+config[:profile] = ENV["PROFILE"] if ENV["PROFILE"]
+config[:profile_hours] = Integer(ENV["PROFILE_HOURS"]) if ENV["PROFILE_HOURS"]
+config[:ingress_csv] = ENV["INGRESS_CSV"] if ENV["INGRESS_CSV"]
+config[:durations_csv] = ENV["DURATIONS_CSV"] if ENV["DURATIONS_CSV"]
+config[:burst_ratio] = Float(ENV["BURST_RATIO"]) if ENV["BURST_RATIO"]
+config[:no_open] = true if ENV["NO_OPEN"]
+
+# CLI flag overrides
+OptionParser.new do |opts|
+  opts.banner = "Usage: skaler_sim [options]"
+  opts.separator ""
+  opts.separator "Simulation parameters:"
+
+  opts.on("--max-time DURATION", "Simulated duration, e.g. 3600, 60m, 8h (default: #{defaults[:max_time]})") { |v| config[:max_time] = parse_duration(v) }
+  opts.on("--rate N", Integer, "Arrivals per minute (default: #{defaults[:rate]})") { |v| config[:rate] = v }
+  opts.on("--seed N", Integer, "Random seed (default: #{defaults[:seed]})") { |v| config[:seed] = v }
+  opts.on("--profile PATH", "Load job types and arrival rates from a CSV profile (overrides --rate and --cascade)") { |v| config[:profile] = v }
+  opts.on("--profile-hours N", Integer, "Hours the profile CSV covers (default: #{defaults[:profile_hours]})") { |v| config[:profile_hours] = v }
+  opts.on("--ingress-csv PATH", "Per-minute ingress timeseries CSV (timestamp + job class columns). Overrides --rate.") { |v| config[:ingress_csv] = v }
+  opts.on("--durations PATH", "Job durations CSV (action,mean_ms,p90_ms). Used with --ingress-csv for realistic durations.") { |v| config[:durations_csv] = v }
+  opts.on("--burst-ratio F", Float, "Fraction of scheduled arrivals in burst vs uniform (default: #{defaults[:burst_ratio]})") { |v| config[:burst_ratio] = v }
+
+  opts.separator ""
+  opts.separator "PID tuning:"
+
+  opts.on("--kp F", Float, "Proportional gain (default: #{defaults[:kp]})") { |v| config[:kp] = v }
+  opts.on("--ki F", Float, "Integral gain (default: #{defaults[:ki]})") { |v| config[:ki] = v }
+  opts.on("--kd F", Float, "Derivative gain (default: #{defaults[:kd]})") { |v| config[:kd] = v }
+  opts.on("--setpoint F", Float, "Target utilization (default: #{defaults[:setpoint]})") { |v| config[:setpoint] = v }
+  opts.on("--deadband F", Float, "PID deadband (default: #{defaults[:deadband]})") { |v| config[:deadband] = v }
+
+  opts.separator ""
+  opts.separator "Pool configuration:"
+
+  opts.on("--workers N", Integer, "Initial workers (default: #{defaults[:workers]})") { |v| config[:workers] = v }
+  opts.on("--max-workers N", Integer, "Max workers (default: #{defaults[:max_workers]})") { |v| config[:max_workers] = v }
+  opts.on("--threads N", Integer, "Threads per worker (default: #{defaults[:threads]})") { |v| config[:threads] = v }
+
+  opts.separator ""
+  opts.separator "Timing:"
+
+  opts.on("--interval DURATION", "Autoscaler interval, e.g. 60, 30s, 2m (default: #{defaults[:interval]})") { |v| config[:interval] = parse_duration(v) }
+  opts.on("--boot-lag DURATION", "Boot lag, e.g. 120, 2m (default: #{defaults[:boot_lag]})") { |v| config[:boot_lag] = parse_duration(v) }
+  opts.on("--cooldown DURATION", "Cooldown, e.g. 15, 15s (default: #{defaults[:cooldown]})") { |v| config[:cooldown] = parse_duration(v) }
+
+  opts.separator ""
+  opts.separator "Metric mode:"
+
+  opts.on("--mode MODE", %w[utilization pressure], "Metric mode (default: #{defaults[:mode]})") { |v| config[:mode] = v }
+  opts.on("--alpha F", Float, "Smoothing alpha (default: #{defaults[:alpha]})") { |v| config[:alpha] = v }
+  opts.on("--cascade F", Float, "Cascade probability (default: #{defaults[:cascade]})") { |v| config[:cascade] = v }
+
+  opts.separator ""
+  opts.separator "Output:"
+
+  opts.on("--output PATH", "SVG output file (default: #{defaults[:output]})") { |v| config[:output] = v }
+  opts.on("--csv PATH", "CSV output file (default: #{defaults[:csv]})") { |v| config[:csv] = v }
+  opts.on("--no-csv", "Skip CSV output") { config[:csv] = nil }
+  opts.on("--no-open", "Skip Quick Look preview (macOS only)") { config[:no_open] = true }
+
+  opts.on("-h", "--help", "Show this help") do
+    puts opts
+    exit
+  end
+end.parse!
+
+# --- Build job types and arrival process ---
+
+if config[:ingress_csv]
+  ingress = Skaler::IngressProfile.from_csv(config[:ingress_csv], durations_csv: config[:durations_csv])
+  job_types = ingress.job_types
+  arrival_config = ingress.arrival_process_config
+  config[:max_time] = ingress.max_time if config[:max_time] == defaults[:max_time]
+  arrival_config[:burst_ratio] = config[:burst_ratio]
+  total_arrivals = arrival_config[:schedule].sum { |_, count, _| count }
+  warn "Loaded ingress CSV: #{job_types.size} job types, #{total_arrivals} total arrivals over #{ingress.max_time / 60}min (from #{config[:ingress_csv]})"
+  warn "  Durations: #{config[:durations_csv] || "default (0.5-2s)"}  Burst ratio: #{config[:burst_ratio]}"
+elsif config[:profile]
+  profile = Skaler::JobProfile.from_csv(config[:profile], hours: config[:profile_hours])
+  job_types = profile.job_types
+  arrival_config = profile.arrival_process_config
+  warn "Loaded profile: #{job_types.size} job types, #{profile.total_rate_per_minute.round(1)} arrivals/min (from #{config[:profile]})"
+else
+  process_email = Skaler::JobType.new(
+    name: :process_email,
+    duration: ->(rng) { rng.rand(0.5..3.0) },
+    spawn_rules: [{probability: config[:cascade], child_type: :summarize, count: 1}]
+  )
+
+  summarize = Skaler::JobType.new(
+    name: :summarize,
+    duration: ->(rng) { rng.rand(3.0..15.0) },
+    spawn_rules: []
+  )
+
+  job_types = {process_email: process_email, summarize: summarize}
+  arrival_config = {mode: :poisson, rate_per_minute: config[:rate], default_type: :process_email}
+end
+
+# --- Build simulator ---
+
+reporter = Skaler::ProgressReporter.new(max_time: config[:max_time], output: $stderr)
+
+sim = Skaler::Simulator.new(
+  job_types: job_types,
+  arrival_process: arrival_config,
+  pid_config: {kp: config[:kp], ki: config[:ki], kd: config[:kd], setpoint: config[:setpoint], deadband: config[:deadband]},
+  pool_config: {initial_workers: config[:workers], threads_per_worker: config[:threads], min_workers: config[:workers], max_workers: config[:max_workers]},
+  constraints: {pg_max: 2000, redis_max: 5000, pg_pool_size: 7, redis_pool_per_worker: 10},
+  timing: {autoscaler_interval: config[:interval], boot_lag_seconds: config[:boot_lag], cooldown_seconds: config[:cooldown], max_time: config[:max_time]},
+  smoothing_alpha: config[:alpha],
+  metric_mode: config[:mode],
+  random_seed: config[:seed],
+  progress_reporter: reporter
+)
+
+# --- Run ---
+
+trace = sim.run
+
+# --- Summary stats ---
+
+if trace.any?
+  peak = trace.map { |s| s[:instances] }.max
+  total_completed = trace.sum { |s| s[:completed_since_last] }
+  cost = trace.last[:cumulative_instance_minutes]
+  warn "Peak instances: #{peak}  |  Total completed: #{total_completed}  |  Cost: #{cost.round(1)} instance-minutes"
+
+  all_p50 = trace.map { |s| s[:latency_p50] || 0 }
+  all_p95 = trace.map { |s| s[:latency_p95] || 0 }
+  all_max = trace.map { |s| s[:latency_max] || 0 }
+  nonzero_p50 = all_p50.reject(&:zero?)
+  nonzero_p95 = all_p95.reject(&:zero?)
+  if nonzero_p50.any?
+    avg_p50 = (nonzero_p50.sum / nonzero_p50.size).round(3)
+    avg_p95 = nonzero_p95.any? ? (nonzero_p95.sum / nonzero_p95.size).round(3) : 0
+    peak_max = all_max.max.round(3)
+    warn "Queue latency:  avg p50=#{avg_p50}s  avg p95=#{avg_p95}s  peak max=#{peak_max}s"
+  else
+    warn "Queue latency:  no queuing observed (all jobs started immediately)"
+  end
+end
+
+# --- Write CSV ---
+
+if config[:csv] && trace.any?
+  require "csv"
+  csv_path = config[:csv]
+  FileUtils.mkdir_p(File.dirname(csv_path))
+
+  columns = %i[
+    t instances utilization raw_utilization error
+    p i d output scale_command
+    busy_threads free_threads ready_queue_depth
+    completed_since_last arrivals_since_last
+    pending_boots cumulative_instance_minutes
+    pg_headroom redis_headroom
+    latency_p50 latency_p95 latency_max
+  ]
+
+  CSV.open(csv_path, "w") do |csv|
+    csv << columns.map(&:to_s)
+    trace.each do |snap|
+      csv << columns.map { |col| snap[col] }
+    end
+  end
+  warn "CSV written to #{csv_path}"
+end
+
+# --- Render SVG ---
+
+svg = Skaler::SvgChart.render(trace, setpoint: config[:setpoint])
+output_path = config[:output]
+
+FileUtils.mkdir_p(File.dirname(output_path))
+File.write(output_path, svg)
+warn "SVG written to #{output_path}"
+
+# --- Quick Look ---
+
+if !config[:no_open] && RUBY_PLATFORM.include?("darwin")
+  system("qlmanage", "-p", output_path, out: File::NULL, err: File::NULL)
+end
